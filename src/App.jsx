@@ -271,6 +271,7 @@ function Today({ tasks, changes, meetings, onCapture, onGo, onDone }) {
         </button>
       ))}
 
+      <div className="today-grid">
       <section className="block">
         <div className="block-head">
           <h2>Due soon</h2>
@@ -297,6 +298,7 @@ function Today({ tasks, changes, meetings, onCapture, onGo, onDone }) {
           </div>
         ))}
       </section>
+      </div>
     </>
   );
 }

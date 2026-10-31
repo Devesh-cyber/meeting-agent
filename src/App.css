@@ -230,3 +230,51 @@ textarea { min-height: 170px; resize: vertical; }
   .add-row { grid-template-columns: 1fr; }
   .person-body { padding-left: 0; }
 }
+
+/* ---------- responsive polish ---------- */
+.topbar { padding-top: calc(12px + env(safe-area-inset-top)); }
+.content { padding-left: max(16px, env(safe-area-inset-left)); padding-right: max(16px, env(safe-area-inset-right)); }
+.check { position: relative; }
+.check::after { content: ''; position: absolute; inset: -10px; }
+.tabbar button { min-height: 48px; }
+.tabbar button, .seg button, .chip, .btn { -webkit-tap-highlight-color: transparent; }
+.toast { bottom: calc(96px + env(safe-area-inset-bottom)); }
+
+/* phones and tablets: 16px inputs stop iOS from zooming in on focus */
+@media (max-width: 899px) {
+  input[type=text], input[type=email], input[type=date], textarea { font-size: 16px; }
+  .content { padding-bottom: calc(110px + env(safe-area-inset-bottom)); }
+}
+
+/* very small phones */
+@media (max-width: 360px) {
+  .topbar .date { display: none; }
+  .bell-wrap { margin-left: auto; }
+  h1 { font-size: 32px; }
+  .brand { font-size: 21px; }
+  .tabbar button span { font-size: 10px; }
+  .steps li { font-size: 10px; letter-spacing: .03em; }
+  .panel { padding: 16px; }
+  .rec-btn { width: 112px; height: 112px; }
+}
+
+/* tablets: give the board room, keep the list readable */
+@media (min-width: 641px) and (max-width: 899px) {
+  .content { max-width: 720px; padding-left: 24px; padding-right: 24px; }
+}
+
+/* phones in landscape: shorter recorder, slimmer tab bar */
+@media (max-height: 500px) and (orientation: landscape) {
+  .rec { padding: 12px 0 4px; }
+  .rec-btn { width: 88px; height: 88px; }
+  .tabbar button { min-height: 40px; padding: 2px 0; }
+  .tabbar button span { display: none; }
+}
+
+/* big screens: wider content, Today in two columns */
+@media (min-width: 1200px) {
+  .content { max-width: 1040px; }
+  .today-grid { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 40px; align-items: start; }
+  .hero { max-width: 760px; }
+  .capture-card, .alert { max-width: 760px; }
+}
