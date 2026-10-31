@@ -82,6 +82,8 @@ export default function App() {
   async function handleAudio(blob, src) {
     setError(''); setStage('working');
     try {
+      if (!blob.size) throw new Error('The recording came out empty. Try again and record for a few seconds.');
+
       setStatus('Uploading audio');
       const ext = blob.name
         ? blob.name.split('.').pop()
@@ -410,7 +412,7 @@ function Recorder({ onDone }) {
         stream.getTracks().forEach(t => t.stop());
         onDone(new Blob(chunks.current, { type: m.mimeType || 'audio/webm' }));
       };
-      m.start();
+      m.start(1000); // save in 1-second chunks (needed for iPhone Safari)
       mr.current = m;
       setSecs(0);
       setLive(true);
