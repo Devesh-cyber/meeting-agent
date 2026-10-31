@@ -323,3 +323,26 @@ p { margin: 0 0 0; }
   margin: 0 4px 8px; padding: 10px; border-radius: 10px; background: var(--wash); font-size: 13px; }
 .push-cta .sub { flex-basis: 100%; font-size: 12px; }
 .bell-panel { top: 44px; }
+
+/* ---------- task edit and delete ---------- */
+.task-tools { display: flex; gap: 14px; margin-top: 4px; }
+.task-tools .link { font-size: 12px; }
+.link.danger { color: var(--danger); }
+.task-edit { display: flex; flex-direction: column; gap: 8px; padding: 12px; margin: 8px 0;
+  background: var(--card); border: 1px solid var(--ink); border-radius: 12px; }
+.task-edit-row { display: grid; grid-template-columns: minmax(0, 1fr) 160px; gap: 8px; }
+.task-edit .row.end { margin-top: 4px; }
+@media (max-width: 420px) { .task-edit-row { grid-template-columns: 1fr; } }
+
+/* ---------- email preview ---------- */
+.preview { margin: 16px 0 8px; }
+.preview h2 { font-size: 22px; }
+.mail { padding: 12px 0; border-bottom: 1px solid var(--line); }
+.mail-top { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; }
+.mail-top input { margin-top: 4px; }
+.mail-who { min-width: 0; }
+.mail-who b { font-weight: 500; }
+.mail-who .sub { display: inline; overflow-wrap: anywhere; }
+.mail-subject { display: block; font-size: 14px; margin-top: 2px; }
+.mail .link { margin: 6px 0 0 26px; }
+.mail-frame { display: block; width: 100%; height: 420px; margin-top: 10px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }

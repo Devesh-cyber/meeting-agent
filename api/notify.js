@@ -1,6 +1,8 @@
 // api/notify.js — deadline reminders + weekly digest per person, sent with Resend.
-// POST {mode: "reminders"|"digest"} from the app buttons, or GET ?mode=... from Vercel Cron.
+// POST {mode, preview: true} returns the emails without sending (the confirmation step).
+// POST {mode, names: [...]} sends to the confirmed people. GET ?mode=... is Vercel Cron (needs CRON_SECRET).
 import { createClient } from '@supabase/supabase-js';
+import { guard, fromCron } from './_guard.js';
 
 const supabase = createClient(
   process.env.VITE_SUPABASE_URL,
@@ -33,7 +35,7 @@ function taskRows(tasks) {
           <div style="font-size:12px;color:#6f6a60">${esc(t.meetings?.title || '')}</div></td>
         <td style="padding:8px 0;border-bottom:1px solid #ddd6c8;text-align:right;font-size:13px;
           color:${t.deadline && daysUntil(t.deadline) < 0 ? '#a3341a' : '#1c1b19'}">${dueLabel(t.deadline)}
-          ${t.trello_url ? `<br><a href="${esc(t.trello_url)}" style="color:#1c1b19;font-size:12px">Open in Trello</a>` : ''}</td>
+          ${/^https:\/\/trello\.com\//.test(t.trello_url || '') ? `<br><a href="${esc(t.trello_url)}" style="color:#1c1b19;font-size:12px">Open in Trello</a>` : ''}</td>
       </tr>`
     )
     .join('');
@@ -68,9 +70,16 @@ async function sendEmail(to, subject, html) {
 }
 
 export default async function handler(req, res) {
+  // Scheduled runs (GET) must carry the cron secret; app buttons (POST) must come from the app
+  if (req.method === 'GET') {
+    if (!fromCron(req)) return res.status(401).json({ error: 'Scheduled runs need a valid CRON_SECRET' });
+  } else if (!guard(req, res, { methods: ['POST'] })) return;
   const mode = req.method === 'GET' ? req.query.mode : req.body?.mode;
+  const preview = req.method === 'POST' && req.body?.preview === true;
+  const only = req.method === 'POST' && Array.isArray(req.body?.names)
+    ? new Set(req.body.names.map(key)) : null;
   if (!['reminders', 'digest'].includes(mode)) return res.status(400).json({ error: 'mode must be reminders or digest' });
-  if (!process.env.RESEND_API_KEY) return res.status(500).json({ error: 'RESEND_API_KEY is not set' });
+  if (!preview && !process.env.RESEND_API_KEY) return res.status(500).json({ error: 'RESEND_API_KEY is not set' });
 
   const { data: people, error: pErr } = await supabase.from('people').select('name, email');
   if (pErr) return res.status(500).json({ error: pErr.message });
@@ -80,6 +89,7 @@ export default async function handler(req, res) {
     .neq('status', 'done')
     .order('deadline', { ascending: true, nullsFirst: false });
   if (tErr) return res.status(500).json({ error: tErr.message });
+  if (!Array.isArray(tasks)) return res.status(500).json({ error: 'Could not read tasks' });
 
   // Decisions from the last 7 days, and the older ones they replaced
   let fresh = [], replaced = [];
@@ -101,10 +111,11 @@ export default async function handler(req, res) {
   }
 
   const byPerson = new Map((people || []).map(p => [key(p.name), p]));
-  const sent = [], skipped = [], failed = [];
+  const sent = [], skipped = [], failed = [], emails = [];
   const unmatched = [...new Set(tasks.filter(t => t.owner && !byPerson.has(key(t.owner))).map(t => t.owner))];
 
   for (const p of people || []) {
+    if (only && !only.has(key(p.name))) continue;
     const mine = tasks.filter(t => key(t.owner) === key(p.name));
     let subject, html;
 
@@ -136,6 +147,10 @@ export default async function handler(req, res) {
         (changes ? `<h3 style="font-size:14px">Decisions this week</h3><ul style="padding-left:18px">${changes}</ul>` : ''));
     }
 
+    if (preview) {
+      emails.push({ name: p.name, email: p.email, subject, html, count: mine.length });
+      continue;
+    }
     try {
       await sendEmail(p.email, subject, html);
       sent.push(p.name);
@@ -145,5 +160,6 @@ export default async function handler(req, res) {
     await sleep(600); // Resend free tier: max 2 emails per second
   }
 
+  if (preview) return res.json({ mode, emails, skipped, unmatched });
   res.json({ mode, sent, skipped, failed, unmatched });
 }

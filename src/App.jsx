@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from './lib/supabase';
 import './App.css';
 
@@ -30,15 +30,29 @@ function dueClass(t) {
 }
 
 async function post(url, body) {
-  const r = await fetch(url, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  const d = await r.json();
-  if (!r.ok) throw new Error(d.error?.message || d.error || 'Request failed');
+  let r;
+  try {
+    r = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    throw new Error('You seem to be offline. Check your connection and try again.');
+  }
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    const msg = typeof d.error === 'string' ? d.error : d.error?.message;
+    throw new Error(msg || (r.status === 504 ? 'That took too long. Try again.' : `Something went wrong (${r.status}).`));
+  }
   return d;
 }
+
+// Only open real web links (protects against javascript: links stored in the database)
+const safeUrl = u => (typeof u === 'string' && /^https:\/\//.test(u) ? u : null);
+
+// Task edit and delete actions, shared by every task list
+const TaskActions = createContext({ updateTask: async () => {}, deleteTask: async () => {} });
 
 function parsePasted(text) {
   return text
@@ -123,7 +137,11 @@ const BELL = 'M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10 21a2 2 0 0 0 4 0';
 
 /* ---------- app ---------- */
 export default function App() {
-  const [tab, setTab] = useState('today');
+  // Opened from a notification (/?tab=tasks): start on that screen
+  const [tab, setTab] = useState(() => {
+    const t = new URLSearchParams(window.location.search).get('tab');
+    return NAV.some(([k]) => k === t) ? t : 'today';
+  });
   const [tasks, setTasks] = useState([]);
   const [decisions, setDecisions] = useState([]);
   const [people, setPeople] = useState([]);
@@ -136,9 +154,6 @@ export default function App() {
   useEffect(() => {
     loadAll();
     swReg();
-    // Opened from a notification: jump to the right tab
-    const t = new URLSearchParams(location.search).get('tab');
-    if (t && NAV.some(([k]) => k === t)) setTab(t);
     // Keep data fresh while the app is open, and when it comes back to the front
     const id = setInterval(loadAll, 5 * 60 * 1000);
     const onVis = () => document.visibilityState === 'visible' && loadAll();
@@ -176,7 +191,38 @@ export default function App() {
 
   async function setStatus(t, status) {
     setTasks(ts => ts.map(x => (x.id === t.id ? { ...x, status } : x)));
-    await supabase.from('action_items').update({ status }).eq('id', t.id);
+    const { error } = await supabase.from('action_items').update({ status }).eq('id', t.id);
+    if (error) { flash('Could not update the task. Try again.'); loadAll(); }
+  }
+
+  async function updateTask(t, fields) {
+    const clean = {
+      task: fields.task.trim(),
+      owner: fields.owner.trim() || null,
+      deadline: fields.deadline || null,
+    };
+    if (!clean.task) { flash('A task needs a name'); return false; }
+    setTasks(ts => ts.map(x => (x.id === t.id ? { ...x, ...clean } : x)));
+    const { error } = await supabase.from('action_items').update(clean).eq('id', t.id);
+    if (error) { flash('Could not save the change. Try again.'); loadAll(); return false; }
+    if (safeUrl(t.trello_url)) {
+      post('/api/trello', { action: 'update', item: { ...clean, trello_url: t.trello_url } })
+        .catch(() => flash('Saved here, but Trello did not update'));
+    }
+    flash('Task updated');
+    return true;
+  }
+
+  async function deleteTask(t) {
+    if (!window.confirm(`Delete "${t.task}"? This can't be undone.`)) return;
+    setTasks(ts => ts.filter(x => x.id !== t.id));
+    const { error } = await supabase.from('action_items').delete().eq('id', t.id);
+    if (error) { flash('Could not delete the task. Try again.'); loadAll(); return; }
+    if (safeUrl(t.trello_url)) {
+      post('/api/trello', { action: 'archive', item: { trello_url: t.trello_url } })
+        .catch(() => flash('Deleted here, but the Trello card is still open'));
+    }
+    flash('Task deleted');
   }
 
   // Decisions that replaced an older one in the last 7 days
@@ -254,6 +300,7 @@ export default function App() {
   }
 
   return (
+    <TaskActions.Provider value={{ updateTask, deleteTask }}>
     <div className="shell">
       <aside className="sidebar">
         <div className="brand"><span className="dot" />Minutes</div>
@@ -335,8 +382,9 @@ export default function App() {
         </main>
       </div>
 
-      {toast && <div className="toast">{toast}</div>}
+      {toast && <div className="toast" role="status">{toast}</div>}
     </div>
+    </TaskActions.Provider>
   );
 }
 
@@ -412,6 +460,39 @@ function Today({ tasks, changes, meetings, onCapture, onGo, onDone, perm, onEnab
 /* ---------- shared task row ---------- */
 function TaskRow({ t, onToggle }) {
   const done = t.status === 'done';
+  const { updateTask, deleteTask } = useContext(TaskActions);
+  const [editing, setEditing] = useState(false);
+  const [form, setForm] = useState({ task: '', owner: '', deadline: '' });
+  const trello = safeUrl(t.trello_url);
+
+  function startEdit() {
+    setForm({ task: t.task || '', owner: t.owner || '', deadline: t.deadline || '' });
+    setEditing(true);
+  }
+  async function save(e) {
+    e.preventDefault();
+    if (await updateTask(t, form)) setEditing(false);
+  }
+
+  if (editing) {
+    return (
+      <form className="task-edit" onSubmit={save}>
+        <input type="text" aria-label="Task" value={form.task} autoFocus
+          onChange={e => setForm(f => ({ ...f, task: e.target.value }))} />
+        <div className="task-edit-row">
+          <input type="text" aria-label="Owner" placeholder="Owner" value={form.owner}
+            onChange={e => setForm(f => ({ ...f, owner: e.target.value }))} />
+          <input type="date" aria-label="Deadline" value={form.deadline}
+            onChange={e => setForm(f => ({ ...f, deadline: e.target.value }))} />
+        </div>
+        <div className="row end">
+          <button type="button" className="btn ghost small" onClick={() => setEditing(false)}>Cancel</button>
+          <button type="submit" className="btn small">Save</button>
+        </div>
+      </form>
+    );
+  }
+
   return (
     <div className={`task-row ${done ? 'done' : ''}`}>
       <button className={`check ${done ? 'on' : ''}`} onClick={onToggle}
@@ -423,8 +504,12 @@ function TaskRow({ t, onToggle }) {
         <span className="task-meta">
           {t.owner || 'Unassigned'}
           {t.meetings?.title ? ` · ${t.meetings.title}` : ''}
-          {t.trello_url && <> · <a href={t.trello_url} target="_blank" rel="noreferrer">Trello</a></>}
+          {trello && <> · <a href={trello} target="_blank" rel="noreferrer">Trello</a></>}
           {t.deadline && <> · <a href={calendarLink(t)} target="_blank" rel="noreferrer">Add to calendar</a></>}
+        </span>
+        <span className="task-tools">
+          <button className="link" onClick={startEdit}>Edit</button>
+          <button className="link danger" onClick={() => deleteTask(t)}>Delete</button>
         </span>
       </div>
       <span className={`badge ${dueClass(t)}`}>{done ? (t.deadline ? fmt(t.deadline) : 'Done') : dueText(t.deadline)}</span>
@@ -614,29 +699,51 @@ function People({ people, tasks, reload, flash, perm, onEnable }) {
   const [err, setErr] = useState('');
   const [sending, setSending] = useState('');
   const [openId, setOpenId] = useState(null);
+  const [preview, setPreview] = useState(null); // { mode, emails, skipped, unmatched }
+  const [pick, setPick] = useState({});
+  const [viewing, setViewing] = useState(null);
   const known = new Set(people.map(p => key(p.name)));
   const missing = [...new Set(tasks.filter(t => t.owner && !known.has(key(t.owner))).map(t => t.owner))];
 
   async function add(name = form.name, email = form.email) {
-    name = name.trim(); email = email.trim();
-    if (!name || !email.includes('@')) return setErr('Enter a name and a valid email.');
+    name = name.trim(); email = email.trim().toLowerCase();
+    if (!name || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return setErr('Enter a name and a valid email.');
+    if (known.has(key(name))) return setErr(`${name} is already on the list.`);
     const { error } = await supabase.from('people').insert({ name, email });
     if (error) return setErr(error.message);
     setForm({ name: '', email: '' }); setErr('');
     reload();
   }
-  async function remove(id) {
-    await supabase.from('people').delete().eq('id', id);
+  async function remove(p) {
+    if (!window.confirm(`Remove ${p.name}? Their tasks stay, but they'll stop getting emails.`)) return;
+    await supabase.from('people').delete().eq('id', p.id);
     reload();
   }
-  async function send(mode) {
-    setSending(mode);
+
+  // Step 1: build the emails without sending, so a person can check them
+  async function prepare(mode) {
+    setSending(mode); setViewing(null);
     try {
-      const r = await post('/api/notify', { mode });
-      flash(r.sent.length ? `Emailed ${r.sent.join(', ')}` : 'Nobody needed an email right now');
+      const r = await post('/api/notify', { mode, preview: true });
+      setPreview(r);
+      setPick(Object.fromEntries(r.emails.map(e => [e.name, true])));
     } catch (e) { flash(e.message); }
     setSending('');
   }
+  // Step 2: send only the emails the person confirmed
+  async function confirmSend() {
+    const names = preview.emails.filter(e => pick[e.name]).map(e => e.name);
+    if (!names.length) return flash('Pick at least one person');
+    setSending('send');
+    try {
+      const r = await post('/api/notify', { mode: preview.mode, names });
+      const failed = r.failed.length ? ` · failed for ${r.failed.map(f => f.name).join(', ')}` : '';
+      flash(r.sent.length ? `Emailed ${r.sent.join(', ')}${failed}` : `Nothing was sent${failed}`);
+      setPreview(null);
+    } catch (e) { flash(e.message); }
+    setSending('');
+  }
+  const picked = preview ? preview.emails.filter(e => pick[e.name]).length : 0;
 
   return (
     <>
@@ -644,11 +751,11 @@ function People({ people, tasks, reload, flash, perm, onEnable }) {
       <p className="lede">Task owners are matched to these names. Reminders go out daily at 8 am, digests every Monday.</p>
 
       <div className="actions">
-        <button className="btn" disabled={!!sending} onClick={() => send('reminders')}>
-          {sending === 'reminders' ? 'Sending…' : 'Send reminders now'}
+        <button className="btn" disabled={!!sending} onClick={() => prepare('reminders')}>
+          {sending === 'reminders' ? 'Preparing…' : 'Review reminders'}
         </button>
-        <button className="btn ghost" disabled={!!sending} onClick={() => send('digest')}>
-          {sending === 'digest' ? 'Sending…' : 'Send weekly digest'}
+        <button className="btn ghost" disabled={!!sending} onClick={() => prepare('digest')}>
+          {sending === 'digest' ? 'Preparing…' : 'Review weekly digest'}
         </button>
         {perm === 'granted' ? (
           <button className="btn ghost" onClick={() => showDeviceNote('Test notification', 'Device notifications are working.', `test-${Date.now()}`, 'people')}>
@@ -658,6 +765,54 @@ function People({ people, tasks, reload, flash, perm, onEnable }) {
           <button className="btn ghost" onClick={onEnable}>Turn on device notifications</button>
         )}
       </div>
+
+      {preview && (
+        <section className="panel preview">
+          <div className="block-head">
+            <h2>{preview.mode === 'digest' ? 'Weekly digest' : 'Deadline reminders'}: check before sending</h2>
+          </div>
+          {preview.emails.length === 0 ? (
+            <p className="empty">
+              {preview.mode === 'reminders'
+                ? 'Nobody has tasks due in the next 2 days or overdue, so there is nothing to send.'
+                : 'Add people first, then their digest appears here.'}
+            </p>
+          ) : (
+            <>
+              <p className="hint">Nothing is sent until you confirm. Untick anyone you want to skip.</p>
+              {preview.emails.map(e => (
+                <div className="mail" key={e.name}>
+                  <label className="mail-top">
+                    <input type="checkbox" checked={!!pick[e.name]}
+                      onChange={ev => setPick(p => ({ ...p, [e.name]: ev.target.checked }))} />
+                    <span className="mail-who">
+                      <b>{e.name}</b> <span className="sub">{e.email}</span>
+                      <span className="mail-subject">{e.subject}</span>
+                    </span>
+                  </label>
+                  <button className="link" onClick={() => setViewing(viewing === e.name ? null : e.name)}>
+                    {viewing === e.name ? 'Hide email' : 'View email'}
+                  </button>
+                  {viewing === e.name && (
+                    <iframe className="mail-frame" title={`Email to ${e.name}`} sandbox="" srcDoc={e.html} />
+                  )}
+                </div>
+              ))}
+            </>
+          )}
+          {preview.unmatched?.length > 0 && (
+            <p className="hint">No email on file for: {preview.unmatched.join(', ')}. Add them below to include them.</p>
+          )}
+          <div className="row end">
+            <button className="btn ghost" onClick={() => setPreview(null)}>Cancel</button>
+            {preview.emails.length > 0 && (
+              <button className="btn" disabled={sending === 'send' || !picked} onClick={confirmSend}>
+                {sending === 'send' ? 'Sending…' : `Send ${picked} email${picked === 1 ? '' : 's'}`}
+              </button>
+            )}
+          </div>
+        </section>
+      )}
 
       <section className="block">
         {people.length === 0 && <p className="empty">Add your teammates so reminders reach them.</p>}
@@ -686,7 +841,7 @@ function People({ people, tasks, reload, flash, perm, onEnable }) {
                       <span className={`badge ${dueClass(t)}`}>{dueText(t.deadline)}</span>
                     </div>
                   ))}
-                  <button className="link" onClick={() => remove(p.id)}>Remove {p.name}</button>
+                  <button className="link danger" onClick={() => remove(p)}>Remove {p.name}</button>
                 </div>
               )}
             </div>
@@ -761,10 +916,12 @@ function Capture({ onSaved }) {
       setStatus('Transcribing and separating speakers');
       const { id } = await post('/api/transcribe', { audioUrl: url });
       let res;
+      const started = Date.now();
       do {
+        if (Date.now() - started > 10 * 60 * 1000) throw new Error('Transcription is taking too long. Try a shorter recording.');
         await new Promise(r => setTimeout(r, 3000));
-        const r = await fetch(`/api/transcript-status?id=${id}`);
-        res = await r.json();
+        const r = await fetch(`/api/transcript-status?id=${encodeURIComponent(id)}`);
+        res = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(res.error || 'Transcription failed');
       } while (res.status !== 'completed');
       if (!res.utterances.length) throw new Error('No speech detected in this recording.');
@@ -850,6 +1007,7 @@ function Capture({ onSaved }) {
         try {
           const { cards } = await post('/api/trello', { items: savedActions, meetingTitle: m.title });
           await Promise.all(cards.filter(c => c.url)
+            .filter(c => safeUrl(c.url))
             .map(c => supabase.from('action_items').update({ trello_url: c.url }).eq('id', c.id)));
         } catch { msg += ' (Trello sync skipped)'; }
       }
@@ -990,10 +1148,20 @@ function Recorder({ onDone }) {
   const mr = useRef(null);
   const chunks = useRef([]);
   const timer = useRef(null);
+  const streamRef = useRef(null);
+
+  // If the user leaves the screen mid-recording, release the microphone
+  useEffect(() => () => {
+    clearInterval(timer.current);
+    if (mr.current) mr.current.onstop = null;
+    try { if (mr.current?.state === 'recording') mr.current.stop(); } catch { /* ignore */ }
+    streamRef.current?.getTracks().forEach(t => t.stop());
+  }, []);
 
   async function start() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
       const m = new MediaRecorder(stream);
       chunks.current = [];
       m.ondataavailable = e => e.data.size && chunks.current.push(e.data);
