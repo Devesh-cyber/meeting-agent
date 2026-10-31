@@ -11,7 +11,7 @@
 #root { max-width: none; margin: 0; padding: 0; border: 0; text-align: left; width: 100%; }
 * { box-sizing: border-box; }
 html, body { margin: 0; background: var(--paper); color: var(--ink); font-family: var(--sans);
-  font-size: 15px; line-height: 1.5; overflow-x: hidden; -webkit-font-smoothing: antialiased; }
+  font-size: 15px; line-height: 1.5; overflow-x: clip; -webkit-font-smoothing: antialiased; }
 button { font: inherit; color: inherit; cursor: pointer; }
 a { color: inherit; }
 s { color: var(--faint); }
@@ -278,3 +278,48 @@ textarea { min-height: 170px; resize: vertical; }
   .hero { max-width: 760px; }
   .capture-card, .alert { max-width: 760px; }
 }
+
+/* ---------- lock the paper theme, even if the phone is in dark mode ---------- */
+:root, html { color-scheme: only light; background: var(--paper); color: var(--ink); }
+#root { width: 100%; max-width: none; min-height: 100vh; display: block; border: 0; text-align: left; }
+h1, h2 { color: var(--ink); font-family: var(--serif); font-weight: 400; letter-spacing: -0.01em; }
+p { margin: 0 0 0; }
+.lede { margin: 8px 0 24px; }
+.hint { margin: 10px 0; }
+.empty { margin: 8px 0; }
+.error { margin: 12px 0 0; }
+.summary { margin: 8px 0 16px; }
+
+/* ---------- phone navigation lives at the top ---------- */
+.tabbar { display: none !important; }
+.topbar { flex-direction: column; align-items: stretch; gap: 8px; padding-bottom: 0;
+  border-bottom: 1px solid var(--line); background: var(--paper); }
+.topbar-row { display: flex; align-items: center; gap: 12px; }
+.topbar-row .date { margin-left: auto; }
+.topnav { display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none; margin: 0 -16px; padding: 0 12px; }
+.topnav::-webkit-scrollbar { display: none; }
+.topnav button { flex: 1 0 auto; display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 44px;
+  padding: 0 10px; background: none; border: 0; border-bottom: 2px solid transparent; color: var(--muted); font-size: 13px; white-space: nowrap; }
+.topnav button.on { color: var(--ink); border-bottom-color: var(--accent); }
+.topnav button.on svg { color: var(--accent); }
+.content { padding-bottom: 48px !important; }
+.toast { bottom: calc(24px + env(safe-area-inset-bottom)) !important; }
+@media (max-width: 420px) {
+  .topnav button { flex-direction: column; gap: 2px; font-size: 11px; padding: 6px 4px; min-height: 52px; }
+}
+@media (min-width: 900px) {
+  .topnav { display: none; }
+  .topbar { border-bottom-color: transparent; padding-bottom: 16px; background: var(--paper); backdrop-filter: none; }
+}
+@media (max-height: 500px) and (orientation: landscape) {
+  .topnav button { flex-direction: row; min-height: 40px; }
+}
+
+/* ---------- notification prompts ---------- */
+.btn.small { padding: 6px 12px; font-size: 13px; border-radius: 8px; }
+.push-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  margin-bottom: 12px; padding: 10px 14px; border-radius: 12px; background: var(--card); border: 1px dashed var(--line); font-size: 14px; }
+.push-cta { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px;
+  margin: 0 4px 8px; padding: 10px; border-radius: 10px; background: var(--wash); font-size: 13px; }
+.push-cta .sub { flex-basis: 100%; font-size: 12px; }
+.bell-panel { top: 44px; }

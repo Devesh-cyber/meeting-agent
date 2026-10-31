@@ -73,6 +73,36 @@ function writeSeen(set) {
   try { localStorage.setItem('seen-notes', JSON.stringify([...set])); } catch { /* ignore */ }
 }
 
+/* ---------- device notifications (phone, PC, laptop) ---------- */
+const canNotify = () => typeof window !== 'undefined' && 'Notification' in window && 'serviceWorker' in navigator;
+const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent);
+const isInstalled = () => window.matchMedia?.('(display-mode: standalone)').matches || navigator.standalone === true;
+
+function readPushed() {
+  try { return new Set(JSON.parse(localStorage.getItem('pushed-notes') || '[]')); }
+  catch { return new Set(); }
+}
+function writePushed(set) {
+  try { localStorage.setItem('pushed-notes', JSON.stringify([...set].slice(-300))); } catch { /* ignore */ }
+}
+async function swReg() {
+  if (!canNotify()) return null;
+  try { return await navigator.serviceWorker.register('/sw.js'); } catch { return null; }
+}
+async function showDeviceNote(title, body, tag, tab) {
+  if (!canNotify() || Notification.permission !== 'granted') return false;
+  try {
+    await swReg();
+    const reg = await navigator.serviceWorker.ready; // wait until the worker is active
+    await reg.showNotification(title, {
+      body, tag, icon: '/icon-192.png', badge: '/icon-192.png', data: { tab },
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 const NAV = [
   ['today', 'Today', 'M3 10.5 12 3l9 7.5V21h-6v-6H9v6H3z'],
   ['capture', 'Capture', 'M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3zM5 11a7 7 0 0 0 14 0M12 18v3'],
@@ -101,8 +131,26 @@ export default function App() {
   const [toast, setToast] = useState('');
   const [bellOpen, setBellOpen] = useState(false);
   const [seen, setSeen] = useState(readSeen);
+  const [perm, setPerm] = useState(() => (canNotify() ? Notification.permission : 'unsupported'));
 
-  useEffect(() => { loadAll(); }, []);
+  useEffect(() => {
+    loadAll();
+    swReg();
+    // Opened from a notification: jump to the right tab
+    const t = new URLSearchParams(location.search).get('tab');
+    if (t && NAV.some(([k]) => k === t)) setTab(t);
+    // Keep data fresh while the app is open, and when it comes back to the front
+    const id = setInterval(loadAll, 5 * 60 * 1000);
+    const onVis = () => document.visibilityState === 'visible' && loadAll();
+    document.addEventListener('visibilitychange', onVis);
+    const onMsg = e => e.data?.tab && setTab(e.data.tab);
+    navigator.serviceWorker?.addEventListener('message', onMsg);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener('visibilitychange', onVis);
+      navigator.serviceWorker?.removeEventListener('message', onMsg);
+    };
+  }, []);
 
   async function loadAll() {
     const [t, d, p, m] = await Promise.all([
@@ -156,6 +204,43 @@ export default function App() {
   }, [tasks, changes]);
   const unread = notes.filter(n => !seen.has(n.id)).length;
 
+  // Send each new notification to this phone or computer once
+  useEffect(() => {
+    if (perm !== 'granted' || !notes.length) return;
+    const pushed = readPushed();
+    const fresh = notes.filter(n => !pushed.has(n.id));
+    if (!fresh.length) return;
+    (async () => {
+      for (const n of fresh.slice(0, 5)) {
+        const title = n.kind === 'change' ? 'Decision changed' : n.kind === 'overdue' ? 'Overdue task' : 'Due soon';
+        const body = n.kind === 'change' ? `${n.text.replace('Decision changed: ', '')}\n${n.sub}` : `${n.text} · ${n.sub}`;
+        await showDeviceNote(title, body, n.id, n.go);
+        pushed.add(n.id);
+      }
+      if (fresh.length > 5) {
+        await showDeviceNote('Minutes', `${fresh.length - 5} more updates waiting in the app`, 'more', 'today');
+        fresh.slice(5).forEach(n => pushed.add(n.id));
+      }
+      writePushed(pushed);
+    })();
+  }, [notes, perm]);
+
+  async function enableNotifications() {
+    if (!canNotify()) {
+      flash(isIOS() && !isInstalled()
+        ? 'On iPhone, add Minutes to your Home Screen first (Share → Add to Home Screen)'
+        : 'This browser does not support notifications');
+      return;
+    }
+    const p = await Notification.requestPermission();
+    setPerm(p);
+    if (p === 'granted') {
+      await showDeviceNote('Notifications are on', 'You\'ll get alerts for due tasks and changed decisions.', 'welcome', 'today');
+    } else {
+      flash('Notifications are blocked. Allow them for this site in your browser settings.');
+    }
+  }
+
   function markAllRead() {
     const next = new Set([...seen, ...notes.map(n => n.id)]);
     setSeen(next);
@@ -184,6 +269,7 @@ export default function App() {
 
       <div className="main">
         <header className="topbar">
+          <div className="topbar-row">
           <div className="brand mobile-only"><span className="dot" />Minutes</div>
           <span className="mono date">{new Date().toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}</span>
           <div className="bell-wrap">
@@ -197,6 +283,17 @@ export default function App() {
                   <span className="mono">Notifications</span>
                   {notes.length > 0 && <button className="link" onClick={markAllRead}>Mark all read</button>}
                 </div>
+                {perm !== 'granted' && (
+                  <div className="push-cta">
+                    <span>Get these on this {/Mobi|Android|iPhone/i.test(navigator.userAgent) ? 'phone' : 'computer'} too.</span>
+                    <button className="btn small" onClick={enableNotifications}>
+                      {perm === 'denied' ? 'Blocked in settings' : 'Turn on'}
+                    </button>
+                    {isIOS() && !isInstalled() && (
+                      <span className="sub">On iPhone, first add Minutes to your Home Screen (Share → Add to Home Screen) and open it from there.</span>
+                    )}
+                  </div>
+                )}
                 {notes.length === 0 && <p className="empty">You're all caught up.</p>}
                 {notes.map(n => (
                   <button key={n.id} className={`note ${n.kind} ${seen.has(n.id) ? 'read' : ''}`}
@@ -208,12 +305,21 @@ export default function App() {
               </div>
             )}
           </div>
+          </div>
+          <nav className="topnav" aria-label="Sections">
+            {NAV.map(([k, l, d]) => (
+              <button key={k} className={tab === k ? 'on' : ''} onClick={() => go(k)}>
+                <Icon d={d} size={18} /><span>{l}</span>
+              </button>
+            ))}
+          </nav>
         </header>
 
         <main className="content">
           {tab === 'today' && (
             <Today tasks={tasks} changes={changes} meetings={meetings}
-              onCapture={() => go('capture')} onGo={go} onDone={t => setStatus(t, 'done')} />
+              onCapture={() => go('capture')} onGo={go} onDone={t => setStatus(t, 'done')}
+              perm={perm} onEnable={enableNotifications} />
           )}
           {tab === 'capture' && (
             <Capture onSaved={msg => { loadAll(); flash(msg); go('today'); }} />
@@ -223,18 +329,11 @@ export default function App() {
           )}
           {tab === 'decisions' && <Decisions decisions={decisions} />}
           {tab === 'people' && (
-            <People people={people} tasks={tasks} reload={loadAll} flash={flash} />
+            <People people={people} tasks={tasks} reload={loadAll} flash={flash}
+              perm={perm} onEnable={enableNotifications} />
           )}
         </main>
       </div>
-
-      <nav className="tabbar">
-        {NAV.map(([k, l, d]) => (
-          <button key={k} className={tab === k ? 'on' : ''} onClick={() => go(k)}>
-            <Icon d={d} size={22} /><span>{l}</span>
-          </button>
-        ))}
-      </nav>
 
       {toast && <div className="toast">{toast}</div>}
     </div>
@@ -242,7 +341,7 @@ export default function App() {
 }
 
 /* ---------- Today ---------- */
-function Today({ tasks, changes, meetings, onCapture, onGo, onDone }) {
+function Today({ tasks, changes, meetings, onCapture, onGo, onDone, perm, onEnable }) {
   const open = tasks.filter(t => t.status !== 'done');
   const overdue = open.filter(t => t.deadline && daysUntil(t.deadline) < 0);
   const week = open.filter(t => t.deadline && daysUntil(t.deadline) >= 0 && daysUntil(t.deadline) <= 7);
@@ -254,6 +353,13 @@ function Today({ tasks, changes, meetings, onCapture, onGo, onDone }) {
         {greeting()}<br />
         <em>{dueCount === 0 ? 'Nothing due this week.' : `${dueCount} thing${dueCount > 1 ? 's' : ''} due this week.`}</em>
       </h1>
+
+      {perm === 'default' && (
+        <div className="push-banner">
+          <span>Get deadline alerts on this device</span>
+          <button className="btn small" onClick={onEnable}>Turn on notifications</button>
+        </div>
+      )}
 
       <button className="capture-card" onClick={onCapture}>
         <span className="rec-dot" />
@@ -503,7 +609,7 @@ function Decisions({ decisions }) {
 }
 
 /* ---------- People ---------- */
-function People({ people, tasks, reload, flash }) {
+function People({ people, tasks, reload, flash, perm, onEnable }) {
   const [form, setForm] = useState({ name: '', email: '' });
   const [err, setErr] = useState('');
   const [sending, setSending] = useState('');
@@ -544,6 +650,13 @@ function People({ people, tasks, reload, flash }) {
         <button className="btn ghost" disabled={!!sending} onClick={() => send('digest')}>
           {sending === 'digest' ? 'Sending…' : 'Send weekly digest'}
         </button>
+        {perm === 'granted' ? (
+          <button className="btn ghost" onClick={() => showDeviceNote('Test notification', 'Device notifications are working.', `test-${Date.now()}`, 'people')}>
+            Test device notification
+          </button>
+        ) : (
+          <button className="btn ghost" onClick={onEnable}>Turn on device notifications</button>
+        )}
       </div>
 
       <section className="block">
