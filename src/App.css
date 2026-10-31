@@ -107,3 +107,4 @@ textarea { min-height: 160px; resize: vertical; }
   .log { flex-direction: column; gap: 4px; }
   .log .mono { text-align: left; }
 }
+.trello { display: inline-block; margin-top: 6px; font-size: 12px; color: var(--ink); }
