@@ -210,13 +210,32 @@ export default function App() {
           meeting_id: m.id, task: a.task, owner: a.owner || null,
           deadline: a.deadline || null, confirmed: true,
         }));
+      let warning = '';
       if (actions.length) {
-        const { error: e } = await supabase.from('action_items').insert(actions);
+        const { data: savedActions, error: e } = await supabase
+          .from('action_items')
+          .insert(actions)
+          .select('id, task, owner, deadline');
         if (e) throw e;
+
+        setStatus('Creating Trello cards');
+        try {
+          const { cards } = await post('/api/trello', { items: savedActions, meetingTitle: m.title });
+          await Promise.all(
+            cards
+              .filter(c => c.url)
+              .map(c => supabase.from('action_items').update({ trello_url: c.url }).eq('id', c.id))
+          );
+          const failed = cards.filter(c => c.error).length;
+          if (failed) warning = `${failed} task(s) saved but not sent to Trello.`;
+        } catch (err) {
+          warning = `Saved, but Trello sync failed: ${err.message}`;
+        }
       }
 
       reset();
-      loadBoard();
+      await loadBoard();
+      if (warning) setError(warning);
     } catch (e) { fail(e, 'review'); }
   }
 
@@ -354,9 +373,10 @@ export default function App() {
               </div>
             ))}
 
+            <p className="mono">Nothing is saved or sent to Trello until you confirm</p>
             <div className="row end">
               <button className="btn ghost" onClick={reset}>Discard</button>
-              <button className="btn" onClick={confirm}>Confirm & save</button>
+              <button className="btn" onClick={confirm}>Confirm & send</button>
             </div>
           </>
         )}
@@ -455,6 +475,10 @@ function TaskCard({ t, onClick }) {
         {t.deadline && <span className={`badge ${cls}`}>{t.deadline}</span>}
       </div>
       {t.meetings?.title && <div className="from">{t.meetings.title}</div>}
+      {t.trello_url && (
+        <a className="trello" href={t.trello_url} target="_blank" rel="noreferrer"
+          onClick={e => e.stopPropagation()}>Open in Trello ↗</a>
+      )}
     </div>
   );
 }
