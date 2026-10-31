@@ -41,8 +41,48 @@ export default function App() {
   const [pasted, setPasted] = useState('');
   const [tasks, setTasks] = useState([]);
   const [log, setLog] = useState([]);
+  const [people, setPeople] = useState([]);
+  const [newPerson, setNewPerson] = useState({ name: '', email: '' });
+  const [notice, setNotice] = useState('');
+  const [sending, setSending] = useState('');
 
-  useEffect(() => { loadBoard(); }, []);
+  useEffect(() => { loadBoard(); loadPeople(); }, []);
+
+  async function loadPeople() {
+    const { data } = await supabase.from('people').select('*').order('name');
+    setPeople(data || []);
+  }
+
+  async function addPerson() {
+    const name = newPerson.name.trim();
+    const email = newPerson.email.trim();
+    if (!name || !email.includes('@')) return setNotice('Enter a name and a valid email.');
+    const { error: e } = await supabase.from('people').insert({ name, email });
+    if (e) return setNotice(e.message);
+    setNewPerson({ name: '', email: '' });
+    setNotice('');
+    loadPeople();
+  }
+
+  async function removePerson(id) {
+    await supabase.from('people').delete().eq('id', id);
+    loadPeople();
+  }
+
+  async function notify(mode) {
+    setSending(mode); setNotice('');
+    try {
+      const r = await post('/api/notify', { mode });
+      const parts = [];
+      parts.push(r.sent.length ? `Sent to ${r.sent.join(', ')}.` : 'No emails needed.');
+      if (r.failed.length) parts.push(`Failed: ${r.failed.map(f => f.name).join(', ')}.`);
+      if (r.unmatched.length) parts.push(`No email on file for: ${r.unmatched.join(', ')}.`);
+      setNotice(parts.join(' '));
+    } catch (e) {
+      setNotice(e.message);
+    }
+    setSending('');
+  }
 
   async function loadBoard() {
     const { data: t } = await supabase
@@ -400,6 +440,35 @@ export default function App() {
       </section>
 
       <section className="section">
+        <h2>People & follow-ups</h2>
+        <p className="mono">Owners are matched to these names for reminders and digests</p>
+        {people.map(p => (
+          <div className="person" key={p.id}>
+            <span>{p.name}</span>
+            <span className="email">{p.email}</span>
+            <button className="link" onClick={() => removePerson(p.id)}>Remove</button>
+          </div>
+        ))}
+        <div className="row add-person">
+          <input type="text" placeholder="Name (as said in meetings)" value={newPerson.name}
+            onChange={e => setNewPerson(n => ({ ...n, name: e.target.value }))} />
+          <input type="text" placeholder="Email" value={newPerson.email}
+            onChange={e => setNewPerson(n => ({ ...n, email: e.target.value }))} />
+          <button className="btn ghost" onClick={addPerson}>Add</button>
+        </div>
+        <div className="row notify">
+          <button className="btn" disabled={!!sending} onClick={() => notify('reminders')}>
+            {sending === 'reminders' ? 'Sending…' : 'Send deadline reminders'}
+          </button>
+          <button className="btn ghost" disabled={!!sending} onClick={() => notify('digest')}>
+            {sending === 'digest' ? 'Sending…' : 'Send weekly digest'}
+          </button>
+        </div>
+        <p className="mono">Reminders also go out daily at 8:00 am, digests every Monday</p>
+        {notice && <p className="notice">{notice}</p>}
+      </section>
+
+      <section className="section">
         <h2>Decision memory</h2>
         {log.length === 0 && <p className="empty">No decisions yet</p>}
         {log.map(d => (
@@ -461,6 +530,20 @@ function Recorder({ onDone }) {
   );
 }
 
+function calendarLink(t) {
+  const start = t.deadline.replaceAll('-', '');
+  const next = new Date(t.deadline + 'T00:00:00Z');
+  next.setUTCDate(next.getUTCDate() + 1);
+  const end = next.toISOString().slice(0, 10).replaceAll('-', '');
+  const params = new URLSearchParams({
+    action: 'TEMPLATE',
+    text: `Due: ${t.task}`,
+    dates: `${start}/${end}`,
+    details: `Owner: ${t.owner || 'Unassigned'}\nFrom: ${t.meetings?.title || 'meeting'}${t.trello_url ? `\nTrello: ${t.trello_url}` : ''}`,
+  });
+  return `https://calendar.google.com/calendar/render?${params}`;
+}
+
 function TaskCard({ t, onClick }) {
   let cls = '';
   if (t.deadline && t.status !== 'done') {
@@ -475,10 +558,16 @@ function TaskCard({ t, onClick }) {
         {t.deadline && <span className={`badge ${cls}`}>{t.deadline}</span>}
       </div>
       {t.meetings?.title && <div className="from">{t.meetings.title}</div>}
-      {t.trello_url && (
-        <a className="trello" href={t.trello_url} target="_blank" rel="noreferrer"
-          onClick={e => e.stopPropagation()}>Open in Trello ↗</a>
-      )}
+      <div className="links">
+        {t.trello_url && (
+          <a className="trello" href={t.trello_url} target="_blank" rel="noreferrer"
+            onClick={e => e.stopPropagation()}>Open in Trello ↗</a>
+        )}
+        {t.deadline && (
+          <a className="trello" href={calendarLink(t)} target="_blank" rel="noreferrer"
+            onClick={e => e.stopPropagation()}>Add to Calendar ↗</a>
+        )}
+      </div>
     </div>
   );
 }
