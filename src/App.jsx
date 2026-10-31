@@ -702,6 +702,9 @@ function People({ people, tasks, reload, flash, perm, onEnable }) {
   const [preview, setPreview] = useState(null); // { mode, emails, skipped, unmatched }
   const [pick, setPick] = useState({});
   const [viewing, setViewing] = useState(null);
+  const [editId, setEditId] = useState(null);
+  const [editForm, setEditForm] = useState({ name: '', email: '' });
+  const [editErr, setEditErr] = useState('');
   const known = new Set(people.map(p => key(p.name)));
   const missing = [...new Set(tasks.filter(t => t.owner && !known.has(key(t.owner))).map(t => t.owner))];
 
@@ -712,6 +715,21 @@ function People({ people, tasks, reload, flash, perm, onEnable }) {
     const { error } = await supabase.from('people').insert({ name, email });
     if (error) return setErr(error.message);
     setForm({ name: '', email: '' }); setErr('');
+    reload();
+  }
+  function startEdit(p) {
+    setEditId(p.id); setEditErr('');
+    setEditForm({ name: p.name, email: p.email });
+  }
+  async function saveEdit(e, p) {
+    e.preventDefault();
+    const name = editForm.name.trim(), email = editForm.email.trim().toLowerCase();
+    if (!name || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return setEditErr('Enter a name and a valid email.');
+    if (key(name) !== key(p.name) && known.has(key(name))) return setEditErr(`${name} is already on the list.`);
+    const { error } = await supabase.from('people').update({ name, email }).eq('id', p.id);
+    if (error) return setEditErr('Could not save. Try again.');
+    setEditId(null);
+    flash('Saved');
     reload();
   }
   async function remove(p) {
@@ -822,6 +840,23 @@ function People({ people, tasks, reload, flash, perm, onEnable }) {
           const isOpen = openId === p.id;
           return (
             <div className="person" key={p.id}>
+              {editId === p.id ? (
+                <form className="task-edit" onSubmit={e => saveEdit(e, p)}>
+                  <div className="task-edit-row">
+                    <input type="text" aria-label="Name" value={editForm.name} autoFocus
+                      onChange={e => setEditForm(f => ({ ...f, name: e.target.value }))} />
+                    <input type="email" aria-label="Email" value={editForm.email}
+                      onChange={e => setEditForm(f => ({ ...f, email: e.target.value }))} />
+                  </div>
+                  {editErr && <p className="error">{editErr}</p>}
+                  <div className="row end">
+                    <button type="button" className="btn ghost small" onClick={() => setEditId(null)}>Cancel</button>
+                    <button type="submit" className="btn small">Save</button>
+                  </div>
+                </form>
+              ) : (
+              <>
+              <div className="person-line">
               <button className="person-top" onClick={() => setOpenId(isOpen ? null : p.id)}>
                 <span className="avatar">{p.name.slice(0, 2).toUpperCase()}</span>
                 <span className="person-name">
@@ -832,6 +867,11 @@ function People({ people, tasks, reload, flash, perm, onEnable }) {
                   {mine.length} open{late ? <b className="late"> · {late} late</b> : ''}
                 </span>
               </button>
+              <span className="person-tools">
+                <button className="link" onClick={() => startEdit(p)} aria-label={`Edit ${p.name}`}>Edit</button>
+                <button className="link danger" onClick={() => remove(p)} aria-label={`Remove ${p.name}`}>Remove</button>
+              </span>
+              </div>
               {isOpen && (
                 <div className="person-body">
                   {mine.length === 0 && <p className="empty">No open tasks.</p>}
@@ -841,8 +881,9 @@ function People({ people, tasks, reload, flash, perm, onEnable }) {
                       <span className={`badge ${dueClass(t)}`}>{dueText(t.deadline)}</span>
                     </div>
                   ))}
-                  <button className="link danger" onClick={() => remove(p)}>Remove {p.name}</button>
                 </div>
+              )}
+              </>
               )}
             </div>
           );
