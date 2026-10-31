@@ -36,8 +36,19 @@ export function guard(req, res, { methods = ['POST'], cron = false } = {}) {
 export const isDate = s => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(new Date(s + 'T00:00:00Z'));
 export const clip = (s, n) => String(s ?? '').slice(0, n);
 
-// Groq JSON call with a clean error instead of a crash when the model misbehaves
-export async function groqJSON(prompt, temperature = 0.1) {
+// Groq JSON call with a clean error instead of a crash when the model misbehaves.
+// The model occasionally writes slightly broken JSON and Groq rejects it ("Failed to validate JSON"),
+// so retry, and as a last resort ask without JSON mode and pull the object out of the text.
+function parseLoose(text) {
+  if (!text) return null;
+  try { return JSON.parse(text); } catch { /* try harder */ }
+  const a = text.indexOf('{'), b = text.lastIndexOf('}');
+  if (a === -1 || b <= a) return null;
+  const chunk = text.slice(a, b + 1).replace(/,\s*([}\]])/g, '$1'); // drop trailing commas
+  try { return JSON.parse(chunk); } catch { return null; }
+}
+
+async function groqOnce(prompt, temperature, jsonMode) {
   const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -47,15 +58,29 @@ export async function groqJSON(prompt, temperature = 0.1) {
     body: JSON.stringify({
       model: 'openai/gpt-oss-20b',
       temperature,
-      response_format: { type: 'json_object' },
+      ...(jsonMode ? { response_format: { type: 'json_object' } } : {}),
       messages: [{ role: 'user', content: prompt }],
     }),
   });
   const data = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(data.error?.message || `Groq error ${r.status}`);
-  try {
-    return JSON.parse(data.choices?.[0]?.message?.content || '{}');
-  } catch {
-    throw new Error('The AI returned an unreadable answer. Try again.');
+  if (r.ok) return { out: parseLoose(data.choices?.[0]?.message?.content) };
+  // Groq hands back the rejected text; it's often usable
+  const failed = data.error?.failed_generation;
+  if (failed) return { out: parseLoose(failed) };
+  return { err: data.error?.message || `Groq error ${r.status}`, status: r.status };
+}
+
+export async function groqJSON(prompt, temperature = 0.1) {
+  const attempts = [[temperature, true], [0, true], [0, false]];
+  let lastErr = 'The AI returned an unreadable answer. Try again.';
+  for (const [t, jsonMode] of attempts) {
+    const p = jsonMode ? prompt : `${prompt}\n\nReply with the JSON object only. No markdown, no explanation.`;
+    const { out, err, status } = await groqOnce(p, t, jsonMode);
+    if (out && typeof out === 'object') return out;
+    if (err) {
+      lastErr = err;
+      if (status === 401 || status === 403 || status === 429) break; // retrying won't help
+    }
   }
+  throw new Error(/validate JSON/i.test(lastErr) ? 'The AI returned an unreadable answer. Try again.' : lastErr);
 }
