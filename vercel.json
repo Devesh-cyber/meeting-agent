@@ -1,6 +1,5 @@
 {
-  "crons": [
-    { "path": "/api/notify?mode=reminders", "schedule": "30 2 * * *" },
-    { "path": "/api/notify?mode=digest", "schedule": "45 2 * * 1" }
-  ]
+  "functions": {
+    "api/*.js": { "maxDuration": 60 }
+  }
 }

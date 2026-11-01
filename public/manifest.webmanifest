@@ -1,7 +1,7 @@
 {
-  "name": "Minutes — meeting to execution",
+  "name": "Minutes — your meetings, minuted",
   "short_name": "Minutes",
-  "description": "Every decision remembered. Every task owned.",
+  "description": "Record any conversation and get the minutes, follow-ups and reminders. A personal calendar built in.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#f4f1ea",
@@ -9,5 +9,9 @@
   "icons": [
     { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
     { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Record", "short_name": "Record", "url": "/?go=record", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Note to self", "short_name": "Note", "url": "/?go=note", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] }
   ]
 }

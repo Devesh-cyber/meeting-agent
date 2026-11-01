@@ -1,4 +1,34 @@
 // api/_guard.js — shared request checks. Files starting with "_" are not deployed as routes.
+import { createClient } from '@supabase/supabase-js';
+
+const SB_URL = () => (process.env.VITE_SUPABASE_URL || '').replace(/\/$/, '');
+
+// Supabase client that acts as the signed-in user, so database security rules apply
+export function userClient(token) {
+  return createClient(SB_URL(), process.env.VITE_SUPABASE_ANON_KEY, {
+    global: { headers: { Authorization: `Bearer ${token}` } },
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+}
+
+// Admin client for scheduled jobs only (bypasses security rules). Needs SUPABASE_SERVICE_ROLE_KEY.
+export function adminClient() {
+  if (!process.env.SUPABASE_SERVICE_ROLE_KEY) return null;
+  return createClient(SB_URL(), process.env.SUPABASE_SERVICE_ROLE_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+}
+
+// Checks the app origin AND a valid signed-in user. Returns { user, db } or null (response already sent).
+export async function requireUser(req, res, opts = {}) {
+  if (!guard(req, res, opts)) return null;
+  const token = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+  if (!token) { res.status(401).json({ error: 'Sign in first' }); return null; }
+  const db = userClient(token);
+  const { data, error } = await db.auth.getUser(token);
+  if (error || !data?.user) { res.status(401).json({ error: 'Your session expired. Sign in again.' }); return null; }
+  return { user: data.user, db };
+}
 
 // Only accept calls made by this app's own pages (same host), or local development.
 export function fromOurApp(req) {
